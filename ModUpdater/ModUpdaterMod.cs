@@ -20,22 +20,17 @@ namespace ModUpdater
         internal static GitHubClient github;
         internal static bool loggedNextUpdateCheck = false;
         internal static Dictionary<string, IReadOnlyList<RepositoryContent>> repoContents;
-        internal static int update = ModUpdate();
+        internal static int update = 0;
         internal static bool shouldUpdate = false;
+        private static IModHelper modHelper;
 
         public static int ModUpdate()
         {
             updated = new List<ModUpdateManifest>();
             repoContents = new Dictionary<string, IReadOnlyList<RepositoryContent>>();
             string modsPath = (string)typeof(Constants).GetProperty("ModsPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).GetValue(null);
-            string configFile = Path.Combine(modsPath, "ModUpdater", "config.json");
 
             github = github ?? new GitHubClient(new ProductHeaderValue("Platonymous.ModUpdater", "1.0.0"));
-
-            if (!File.Exists(configFile))
-                File.WriteAllText(configFile,Newtonsoft.Json.JsonConvert.SerializeObject(new Config()));
-            
-            config = Newtonsoft.Json.JsonConvert.DeserializeObject<Config>(File.ReadAllText(configFile));
 
             if (config.GitHubUser != "")
             {
@@ -47,27 +42,38 @@ namespace ModUpdater
             {
                 config.LastUpdateCheck = DateTime.Now;
                 shouldUpdate = true;
+                modHelper.WriteConfig(config);
             }
 
             if (!shouldUpdate)
                 return 0;
-
-            File.WriteAllText(configFile, Newtonsoft.Json.JsonConvert.SerializeObject(config));
-
 
             int result = 0;
             foreach (var manifestFile in Directory.GetFiles(modsPath, "manifest.json", SearchOption.AllDirectories)) {
 
                 string dir = Path.GetDirectoryName(manifestFile);
 
-                if (dir.StartsWith("."))
+                string short_dir = dir.Remove(0, modsPath.Length + 1);
+
+                if (short_dir.StartsWith("."))
                     continue;
 
-                if (Directory.GetParent(dir).Name.StartsWith("."))
+                if (new DirectoryInfo(dir).Name.StartsWith('.'))
+                    continue;
+
+                bool disabled = false;
+                foreach (string folder in short_dir.Split('\\')){
+                    if (folder.StartsWith('.'))
+                    {
+                        disabled = true;
+                        break;
+                    }
+                }
+                if (disabled)
                     continue;
 
                 ModUpdateManifest mod = Newtonsoft.Json.JsonConvert.DeserializeObject<ModUpdateManifest>(File.ReadAllText(manifestFile));
-   
+
                 try
                 {
 
@@ -99,11 +105,11 @@ namespace ModUpdater
                 }
             }
 
-       
+
             if (result > 0)
                 patchModLoad();
 
-            string tempFolder = Path.Combine(modsPath, "ModUpdater", "Temp");
+            string tempFolder = Path.Combine(modHelper.DirectoryPath, "Temp");
 
             if (Directory.Exists(tempFolder))
                 new DirectoryInfo(tempFolder).Delete(true);
@@ -122,7 +128,7 @@ namespace ModUpdater
                     return 0;
             }
 
-            string tempFolder = Path.Combine(modsPath, "ModUpdater", "Temp");
+            string tempFolder = Path.Combine(modHelper.DirectoryPath, "Temp");
             var currentVersion = mod.Version;
 
 
@@ -146,7 +152,7 @@ namespace ModUpdater
             Console.WriteLine("[ModUpdater] Checking for updates: " + mod.Name);
             Console.WriteLine("[ModUpdater] Current version: " + currentVersion);
 
-            
+
             if (rContent != null || repo is Repository)
             {
                 if (rContent == null)
@@ -166,7 +172,6 @@ namespace ModUpdater
                    var m = findFile.Match(Path.GetFileNameWithoutExtension(f.Path));
                     return m.Success && m.Groups.Count == 2;
                 });
-
                 if (filesFound.Count() == 0)
                 {
                     Console.WriteLine("File not found:" + selector);
@@ -179,7 +184,7 @@ namespace ModUpdater
                     var fileName = Path.GetFileNameWithoutExtension(file.Path);
                     var match = findFile.Match(fileName);
                     string newVersion = match.Groups[1].Value;
-                    if (SemanticVersion.TryParse(newVersion, out ISemanticVersion version) 
+                    if (SemanticVersion.TryParse(newVersion, out ISemanticVersion version)
                         && (mod.ModUpdater.Install || (shouldUpdate && SemanticVersion.TryParse(currentVersion, out ISemanticVersion current) && version.IsNewerThan(current))))
                     {
                         if (version.IsPrerelease() && !config.LoadPrereleases)
@@ -188,8 +193,12 @@ namespace ModUpdater
                         var url = file.DownloadUrl;
                         var tempFile = Path.Combine(tempFolder, Path.GetFileName(file.Path));
 
-                        using (WebClient client = new WebClient())
-                            client.DownloadFile(url, tempFile);
+                        using (var client = new System.Net.Http.HttpClient())
+                        {
+                            using var stream = client.GetStreamAsync(url).Result;
+                            using var fs = new FileStream(tempFile, System.IO.FileMode.CreateNew);
+                            stream.CopyToAsync(fs).Wait();
+                        }
 
                         ModUpdateManifest updateManifest = null;
 
@@ -278,7 +287,7 @@ namespace ModUpdater
                 prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ModUpdaterMod), nameof(TryLoadMod)))
                 );
         }
-        
+
         public static bool CheckForUpdatesAsync(object __instance, ref IModInfo[] mods)
         {
             if (update > 0 && config.AutoRestart && Constants.TargetPlatform == GamePlatform.Windows)
@@ -302,12 +311,14 @@ namespace ModUpdater
 
         public override void Entry(IModHelper helper)
         {
+            modHelper = helper;
             config = helper.ReadConfig<Config>();
             helper.WriteConfig<Config>(config);
 
             helper.Events.GameLoop.GameLaunched += (s,e) =>
             {
-                if(update > 0)
+                update = ModUpdate();
+                if (update > 0)
                     Monitor.Log(update + " Mod" + (update == 1 ? " was" : "s were") + " updated. A restart is recommended.", LogLevel.Warn);
             };
         }
