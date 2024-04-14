@@ -23,6 +23,7 @@ namespace ModUpdater
         internal static int update = 0;
         internal static bool shouldUpdate = false;
         private static IModHelper modHelper;
+        private static IMonitor monitor;
 
         public static int ModUpdate()
         {
@@ -196,7 +197,7 @@ namespace ModUpdater
                         using (var client = new System.Net.Http.HttpClient())
                         {
                             using var stream = client.GetStreamAsync(url).Result;
-                            using var fs = new FileStream(tempFile, System.IO.FileMode.CreateNew);
+                            using var fs = new FileStream(tempFile, System.IO.FileMode.Create);
                             stream.CopyToAsync(fs).Wait();
                         }
 
@@ -221,7 +222,6 @@ namespace ModUpdater
                                 }
                             }else
                                 continue;
-
                             foreach (ZipArchiveEntry e in zip1.Entries)
                             {
                                 string filePath = e.FullName.Replace('/', '\\');
@@ -256,8 +256,21 @@ namespace ModUpdater
                                     if (Directory.Exists(dFolderPath))
                                         Directory.Delete(dFolderPath, true);
                                 }
-
-                                e.ExtractToFile(tPath, true);
+                                try
+                                {
+                                    e.ExtractToFile(tPath, true);
+                                } catch(IOException ex)
+                                {
+                                    monitor.Log("[ModUpdater] [" + mod.UniqueID + "] Updating "+ Path.GetFileName(tempFile) + " failed. Please try again later or do it manually", LogLevel.Warn);
+                                    monitor.Log("[ModUpdater] [" + mod.UniqueID + "] The update files moved to '" + Path.Combine(modHelper.DirectoryPath, "Manual") + "'", LogLevel.Warn);
+                                    monitor.Log("[ModUpdater] [" + mod.UniqueID + "] Caused by: "+ ex.Message, LogLevel.Warn);
+                                    string ManualPath = Path.Combine(tempFolder, "..\\Manual");
+                                    string ManualFile = Path.Combine(ManualPath, Path.GetFileName(tempFile));
+                                    if (!Directory.Exists(ManualPath))
+                                        Directory.CreateDirectory(ManualPath);
+                                    File.Copy(tempFile, ManualFile, true);
+                                    return 0;
+                                }
                             }
                         }
 
@@ -312,12 +325,13 @@ namespace ModUpdater
         public override void Entry(IModHelper helper)
         {
             modHelper = helper;
+            monitor = Monitor;
             config = helper.ReadConfig<Config>();
+            update = ModUpdate();
             helper.WriteConfig<Config>(config);
 
             helper.Events.GameLoop.GameLaunched += (s,e) =>
             {
-                update = ModUpdate();
                 if (update > 0)
                     Monitor.Log(update + " Mod" + (update == 1 ? " was" : "s were") + " updated. A restart is recommended.", LogLevel.Warn);
             };
