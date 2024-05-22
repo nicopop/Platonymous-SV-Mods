@@ -32,14 +32,14 @@ namespace ModUpdater
             string modsPath = (string)typeof(Constants).GetProperty("ModsPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).GetValue(null);
 
             github = github ?? new GitHubClient(new ProductHeaderValue("Platonymous.ModUpdater", "1.0.0"));
-
+            monitor.Log("Starting", LogLevel.Info );
             if (config.GitHubUser != "")
             {
                 var basicAuth = new Credentials(config.GitHubUser, config.GitHubPassword);
                 github.Credentials = basicAuth;
             }
 
-                if ((DateTime.Now - config.LastUpdateCheck).TotalMinutes >= config.Interval)
+            if ((DateTime.Now - config.LastUpdateCheck).TotalMinutes >= config.Interval)
             {
                 config.LastUpdateCheck = DateTime.Now;
                 shouldUpdate = true;
@@ -47,7 +47,10 @@ namespace ModUpdater
             }
 
             if (!shouldUpdate)
+            {
+                monitor.Log($"Will only check for update in {(DateTime.Now - config.LastUpdateCheck).TotalMinutes:F0} minutes", LogLevel.Info);
                 return 0;
+            }
 
             int result = 0;
             foreach (var manifestFile in Directory.GetFiles(modsPath, "manifest.json", SearchOption.AllDirectories)) {
@@ -72,9 +75,7 @@ namespace ModUpdater
                 }
                 if (disabled)
                     continue;
-
                 ModUpdateManifest mod = Newtonsoft.Json.JsonConvert.DeserializeObject<ModUpdateManifest>(File.ReadAllText(manifestFile));
-
                 try
                 {
 
@@ -94,14 +95,14 @@ namespace ModUpdater
                 }
                 catch (RateLimitExceededException e)
                 {
-                    Console.WriteLine("[ModUpdater] [" + mod.UniqueID + "] Updater failed: " + "API Rate Limit exceeded. Please try again later.");
-                    Console.WriteLine(e.Limit);
+                    monitor.Log("[" + mod.UniqueID + "] Updater failed: " + "API Rate Limit exceeded. Please try again later.", LogLevel.Error);
+                    monitor.Log(e.Limit.ToString(), LogLevel.Error);
                     continue;
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("[ModUpdater] [" + mod.UniqueID + "] Updater failed. Please try again later.");
-                    Console.WriteLine(e.StackTrace);
+                    monitor.Log("[" + mod.UniqueID + "] Updater failed. Please try again later.", LogLevel.Error);
+                    monitor.Log(e.StackTrace, LogLevel.Error);
                     continue;
                 }
             }
@@ -123,7 +124,7 @@ namespace ModUpdater
             {
                 if (!loggedNextUpdateCheck)
                 {
-                    Console.WriteLine("[ModUpdater] Next update check: " + (config.LastUpdateCheck.AddMinutes(config.Interval).ToString("s")));
+                    monitor.Log("Next update check: " + (config.LastUpdateCheck.AddMinutes(config.Interval).ToString("s")), LogLevel.Info);
                     loggedNextUpdateCheck = true;
                 }
                     return 0;
@@ -150,8 +151,8 @@ namespace ModUpdater
                 repo = repoRequest.Result;
             }
 
-            Console.WriteLine("[ModUpdater] Checking for updates: " + mod.Name);
-            Console.WriteLine("[ModUpdater] Current version: " + currentVersion);
+            monitor.Log("Checking for updates: " + mod.Name, LogLevel.Info);
+            monitor.Log("Current version: " + currentVersion, LogLevel.Info);
 
 
             if (rContent != null || repo is Repository)
@@ -175,7 +176,7 @@ namespace ModUpdater
                 });
                 if (filesFound.Count() == 0)
                 {
-                    Console.WriteLine("File not found:" + selector);
+                    monitor.Log("File not found:" + selector, LogLevel.Trace);
 
                     return 0;
                 }
@@ -216,7 +217,7 @@ namespace ModUpdater
                                         && SemanticVersion.TryParse(updateManifest.MinimumApiVersion, out ISemanticVersion updateApiVersion)
                                         && Constants.ApiVersion.IsOlderThan(updateApiVersion))
                                     {
-                                        Console.WriteLine("[ModUpdater] [" + updateManifest.UniqueID + "]" + "Could not update to version" + updateManifest.Version + ". Need at least SMAPI " + updateManifest.MinimumApiVersion);
+                                        monitor.Log("[ModUpdater] [" + updateManifest.UniqueID + "]" + "Could not update to version" + updateManifest.Version + ". Need at least SMAPI " + updateManifest.MinimumApiVersion, LogLevel.Error);
                                         continue;
                                     }
                                 }
@@ -227,14 +228,13 @@ namespace ModUpdater
                                 string filePath = e.FullName.Replace('/', '\\');
                                 List<string> filePathParts = filePath.Split('\\').ToList();
                                 filePathParts.RemoveAt(0);
-                                Console.WriteLine(modFolder);
                                 filePath = Path.Combine(filePathParts.ToArray());
                                 var tPath = Path.Combine(modFolder, filePath);
                                 var tDirectory = Path.Combine(modFolder, Path.GetDirectoryName(filePath));
                                 if (!Directory.Exists(tDirectory))
                                     Directory.CreateDirectory(tDirectory);
 
-                                Console.WriteLine("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Updating file: " + tPath);
+                                monitor.Log("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Updating file: " + tPath, LogLevel.Info);
 
                                 if (File.Exists(tPath) && updateManifest.ModUpdater.DoNotReplace.Contains(Path.GetFileName(tPath)))
                                     continue;
@@ -242,7 +242,7 @@ namespace ModUpdater
                                 foreach (string dFile in updateManifest.ModUpdater.DeleteFiles)
                                 {
                                     string dfilePath = Path.Combine(modFolder, Path.Combine(dFile.Replace('/', '\\').Split('\\')));
-                                    Console.WriteLine("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Deleting file: " + dFile);
+                                    monitor.Log("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Deleting file: " + dFile, LogLevel.Info);
 
                                     if (File.Exists(dfilePath))
                                         File.Delete(dfilePath);
@@ -251,7 +251,7 @@ namespace ModUpdater
                                 foreach (string dFolder in updateManifest.ModUpdater.DeleteFolders)
                                 {
                                     string dFolderPath = Path.Combine(modFolder, Path.Combine(dFolder.Replace('/', '\\').Split('\\')));
-                                    Console.WriteLine("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Deleting folder: " + dFolder);
+                                    monitor.Log("[ModUpdater] " + " [" + mod.UniqueID + "] " + "Deleting folder: " + dFolder);
 
                                     if (Directory.Exists(dFolderPath))
                                         Directory.Delete(dFolderPath, true);
@@ -274,7 +274,7 @@ namespace ModUpdater
                             }
                         }
 
-                        Console.WriteLine("[ModUpdater]  [" + mod.UniqueID + "] " + mod.Name + " was successfully updated to version " + version);
+                        monitor.Log("[ModUpdater]  [" + mod.UniqueID + "] " + mod.Name + " was successfully updated to version " + version, LogLevel.Info);
 
                         if (updateManifest is ModUpdateManifest)
                             updated.Add(updateManifest);
